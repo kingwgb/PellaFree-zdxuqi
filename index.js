@@ -1,27 +1,26 @@
-// index.js - PellaFree 自动续期 + 重启脚本 (GitHub Actions 专用版)
+// index.js - PellaFree 自动化分流执行版 (GitHub Actions 专用)
 
 const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN;
 const TG_CHAT_ID = process.env.TG_CHAT_ID;
 const ACCOUNT_DATA = process.env.ACCOUNT;
 
 async function run() {
-  console.log('====== 开始执行 PellaFree 自动化任务 ======');
+  // 获取命令行参数，例如: node index.js renew 或 node index.js restart
+  const mode = process.argv[2];
   
-  // 1. 执行自动续期
-  await main('renew');
-  
-  // 延迟 5 秒，确保通知错开
-  await new Promise(resolve => setTimeout(resolve, 5000));
-  
-  // 2. 执行自动重启
-  await main('restart');
-  
-  console.log('====== 所有自动化任务执行完毕 ======');
+  if (mode === 'renew') {
+    console.log('====== 开始执行: PellaFree 自动续期任务 ======');
+    await main('renew');
+  } else if (mode === 'restart') {
+    console.log('====== 开始执行: PellaFree 自动重启任务 ======');
+    await main('restart');
+  } else {
+    console.log('❌ 未知执行模式，请指定参数: renew 或 restart');
+  }
+  console.log('====== 任务执行完毕 ======');
 }
 
 async function main(mode = 'renew') {
-  console.log(`\n▶️ 开始执行: ${mode === 'renew' ? '自动续期' : '自动重启'}...`);
-
   const accounts = parseAccounts(ACCOUNT_DATA);
   if (accounts.length === 0) {
     console.log('❌ 未找到有效账号，请检查 GitHub Secrets 中的 ACCOUNT 变量');
@@ -254,10 +253,7 @@ function formatNotification(result, mode) {
 }
 
 async function sendTG(text) {
-  if (!TG_BOT_TOKEN || !TG_CHAT_ID) {
-    console.log('未配置 TG 通知变量，跳过发送');
-    return;
-  }
+  if (!TG_BOT_TOKEN || !TG_CHAT_ID) return;
   try {
     await fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -283,119 +279,4 @@ async function redeployServer(token, serverId) {
 
   try {
     const data = JSON.parse(responseText);
-    if (data.success || data.message === 'success' || response.status === 200) return { success: true, message: '重启指令已发送' };
-    return { success: false, message: data.error || '未知响应' };
-  } catch {
-    return { success: true, message: '重启指令已发送' };
-  }
-}
-
-async function renewServer(token, serverId, renewLink) {
-  const linkId = renewLink.split('/renew/')[1];
-  if (!linkId) return { success: false, alreadyClaimed: false, message: '无效链接' };
-
-  const response = await fetch(`https://api.pella.app/server/renew?id=${linkId}`, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: '{}'
-  });
-
-  const responseText = await response.text();
-  let data;
-  try { data = JSON.parse(responseText); } catch { return { success: false, alreadyClaimed: false, message: `解析失败` }; }
-
-  if (data.success) return { success: true, alreadyClaimed: false, message: '续期成功' };
-  if (data.error === 'Already claimed' || (data.message && data.message.includes('Already claimed'))) {
-    return { success: false, alreadyClaimed: true, message: 'Already claimed' };
-  }
-  return { success: false, alreadyClaimed: false, message: data.error || '未知响应' };
-}
-
-function parseAccounts(accountStr) {
-  if (!accountStr) return [];
-  return accountStr
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line && line.includes('-----'))
-    .map(line => {
-      const [email, password] = line.split('-----').map(s => s.trim());
-      return { email, password };
-    })
-    .filter(acc => acc.email && acc.password);
-}
-
-async function login(email, password) {
-  const CLERK_API_VERSION = '2025-11-10';
-  const CLERK_JS_VERSION = '5.125.3';
-
-  const signInResponse = await fetch(`https://clerk.pella.app/v1/client/sign_ins?__clerk_api_version=${CLERK_API_VERSION}&_clerk_js_version=${CLERK_JS_VERSION}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ locale: 'zh-CN', identifier: email, password, strategy: 'password' }).toString()
-  });
-
-  if (!signInResponse.ok) throw new Error(`登录失败: HTTP ${signInResponse.status}`);
-  const signInData = await signInResponse.json();
-  let sessionId = signInData.response?.created_session_id;
-  let token = null;
-
-  if (signInData.client?.sessions?.length > 0) {
-    const session = signInData.client.sessions[0];
-    sessionId = sessionId || session.id;
-    token = session.last_active_token?.jwt;
-  }
-
-  const cookies = signInResponse.headers.get('set-cookie') || '';
-  const clientCookie = extractCookie(cookies, '__client');
-  if (token) return { token, sessionId, clientCookie };
-
-  if (sessionId) {
-    const touchResponse = await fetch(`https://clerk.pella.app/v1/client/sessions/${sessionId}/touch?__clerk_api_version=${CLERK_API_VERSION}&_clerk_js_version=${CLERK_JS_VERSION}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Cookie': clientCookie ? `__client=${clientCookie}` : '' },
-      body: 'active_organization_id='
-    });
-    if (touchResponse.ok) {
-      const touchData = await touchResponse.json();
-      token = touchData.sessions?.[0]?.last_active_token?.jwt || touchData.last_active_token?.jwt;
-    }
-  }
-
-  if (!token) throw new Error('无法获取token');
-  return { token, sessionId, clientCookie };
-}
-
-async function getServers(token) {
-  const response = await fetch('https://api.pella.app/user/servers', {
-    method: 'GET',
-    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
-  });
-  if (!response.ok) throw new Error(`获取服务器失败: ${response.status}`);
-  const data = await response.json();
-  return data.servers || [];
-}
-
-function calcRemaining(expiry, now) {
-  if (!expiry) return 'N/A';
-  try {
-    const match = expiry.match(/(\d{2}):(\d{2}):(\d{2})\s+(\d{2})\/(\d{2})\/(\d{4})/);
-    if (!match) return 'N/A';
-    const [, hour, minute, second, day, month, year] = match;
-    const expiryDate = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`);
-    const diff = expiryDate.getTime() - now.getTime();
-    if (diff <= 0) return '已过期';
-    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-    return days > 0 ? `${days}天${hours}时` : `${hours}时`;
-  } catch {
-    return 'N/A';
-  }
-}
-
-function extractCookie(cookieHeader, name) {
-  if (!cookieHeader) return null;
-  const match = cookieHeader.match(new RegExp(`${name}=([^;]+)`));
-  return match ? match[1] : null;
-}
-
-run();
+    if (data.success || data.message === 'success' || response.status === 200) return { success: true, message: '重启指令已发送
