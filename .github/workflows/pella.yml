@@ -1,0 +1,26 @@
+name: PellaFree Daily Renew
+
+on:
+  schedule:
+    # 每天北京时间凌晨 03:12 自动执行续期 (UTC 时间 19:12)
+    - cron: '12 19 * * *'
+  workflow_dispatch: # 支持手动点击按钮触发
+
+jobs:
+  renew-task:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检查代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 执行自动续期
+        env:
+          ACCOUNT: ${{ secrets.ACCOUNT }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: node index.js renew
