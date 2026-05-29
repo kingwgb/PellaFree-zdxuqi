@@ -1,0 +1,26 @@
+name: PellaFree KeepAlive Restart
+
+on:
+  schedule:
+    # 每 2 小时自动执行一次重启任务 (正点第 5 分钟触发，防止与其它任务拥堵)
+    - cron: '5 */2 * * *'
+  workflow_dispatch: # 支持手动点击按钮触发
+
+jobs:
+  restart-task:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检查代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 执行自动重启
+        env:
+          ACCOUNT: ${{ secrets.ACCOUNT }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: node index.js restart
